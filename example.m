@@ -1,7 +1,8 @@
 root_path = '/net/dk-server/jaduckwo/DataAnalysis/';
 handler = WideFieldFileHandler(root_path);
 
-handler.get_experiments()
+file_names = handler.get_experiments();
+file_name =file_names(1);
 
 wave = handler.load_vessel_wave_before_stimuli(file_name);
 wave = handler.load_vessel_wave_after_stimuli(file_name);
