@@ -1,3 +1,4 @@
+root_path = '/net/dk-server/jaduckwo/DataAnalysis/';
 handler = WideFieldFileHandler(root_path);
 
 handler.get_experiments()
