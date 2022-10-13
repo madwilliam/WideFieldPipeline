@@ -1,0 +1,606 @@
+%% Make faster algorithm to process whole trials
+clearvars -except files n 
+% cd('\\dk-server.dk.ucsd.edu\tbroggini\Prime\RAW\')
+root_path = '/net/dk-server/jaduckwo/DataAnalysis/';
+parameter_files = dir(fullfile(root_path,'/*/*Parameters.mat'));
+files = dir('*JD210927F1*\*meters.mat');
+%%
+startLoop = tic;
+for n=1:1
+    %Load necessary data files
+    data_folder = files(n).folder;
+    filename = extractBefore(files(n).name,'_Parameters.mat');
+    try
+        toplottmp = load(append(data_folder,'\',filename,'svd_beforepuff_toplot.mat'));
+        toplot = toplottmp.toplot;
+    catch
+        toplottmp = load(append(data_folder,'\',filename,'svd_beforepuff.mat'));
+        toplot = toplottmp.toplot;
+    end
+    rim = load(append(data_folder,'\rim.mat'));
+    rim = rim.rim;
+%     wave = h5read(append(data_folder,'\',filename,'svd_beforepuff_wave.h5'),'/wave');
+    wave = h5read(append('\\birdstore.dk.ucsd.edu\data\Thomas_1P\Gal\JD210927F1\',filename,'\',filename,'svd_beforepuff_wave.h5'),'/wave');
+    
+    neurowave = h5read(append('\\birdstore.dk.ucsd.edu\data\Thomas_1P\Gal\JD210927F1\',filename,'\',filename,'svd_beforepuff_neurons_wave.h5'),'/wave');
+    try
+        tmpneurotoplot = load(append(data_folder,'\',filename,'svd_beforepuff_neurons_toplot.mat'));
+        neurotoplot = tmpneurotoplot.toplot;
+    catch
+        try
+        tmpneurotoplot = load(append(data_folder,'\',filename,'svd_beforepuff_neurons.mat'));
+        neurotoplot = tmpneurotoplot.toplot;
+        catch
+        tmpneurotoplot = load(append('\\birdstore.dk.ucsd.edu\data\Thomas_1P\Gal\JD210927F1\',filename,'\',filename,'svd_beforepuff_neurons.mat'));
+        neurotoplot = tmpneurotoplot.toplot;  
+        end
+    end
+    %%
+    %Initialize maps and find midline
+    tmp_map = zeros(toplot.mask_size);
+    tmp_map(toplot.mask_ind) = wave(toplot.skel_label,1);
+    
+    tmp_map_n = zeros(neurotoplot.mask_size);
+    tmp_map_n(neurotoplot.mask_ind) = neurowave(neurotoplot.skel_label,1);
+    
+    map_t = zeros(size(tmp_map,1),size(tmp_map,2),size(wave,2));
+    map_t_n = zeros(size(tmp_map_n,1),size(tmp_map_n,2),size(neurowave,2));
+    
+    %Define outer type 1 boundary condition 
+    tmp_exprim = rim; 
+    tmp_exprim(end+500,end+500) = 0; %Expand map to make room for outer bc (should put this into a function)
+    exprim2 = [zeros(size(tmp_exprim,1),500),tmp_exprim];
+    exprim2 = [zeros(500,size(exprim2,2));exprim2];
+    dist1 = bwdist(~exprim2);
+    dist2 = bwdist(exprim2);
+    maxd1 = max(max(dist1))/4;
+    ring = find(round(dist2,0)==round(maxd1,0)); %Set 0 boundary condition at dist proportional to radius of cortex
+    exprim2(ring) = 1;
+    [row,col] = ind2sub(size(exprim2),find(exprim2)); %Constrict map back to minimum necessary size
+    exprim = exprim2(min(row):max(row),min(col):max(col));
+    corr1 = min(row)-1;
+    corr2 = size(exprim2,1)-max(row);
+    corr3 = min(col)-1;
+    corr4 = size(exprim2,2)-max(col);
+    
+    smring = zeros(size(dist2));
+    smring(ring) = 1;
+    smring = smring(min(row):max(row),min(col):max(col));
+    vsl_mask = imread(fullfile(data_folder, 'Mask.tif'));
+    conn = bwconncomp(vsl_mask);
+    if conn.NumObjects>20
+        opt.downsample_rate = 2;
+        opt.imdilate_disk_r = 1;
+        opt.min_kept_cc_num_pixel = 35; % You would need a larger value for higher resolution image 35 for Prime
+        opt.rm_neighbor_out_of_mask_Q = true;
+        opt.vis_mask_Q = true; % Show the cleaned up mask
+        [~, vsl_mask] = fun_get_skeleton_neighbor_ind(vsl_mask, opt);
+        toplot.mask = vsl_mask;
+    end
+    map_ml = toplot.mask; %Find midline
+    map_ml(end+500,end+500) = 0; %Expand
+    expmap_ml = [zeros(size(map_ml,1),500),map_ml];
+    expmap2_ml = [zeros(500,size(expmap_ml,2));expmap_ml];
+    expmap2_ml = expmap2_ml(min(row):max(row),min(col):max(col));
+    mldistmap = bwdist(expmap2_ml);
+    
+    %Use Xiang's code for midline extraction
+    clear expmap_ml map_ml exprim2 ring maxd1 dist2 dist1 tmp_exprim
+    cd('\\dk-server.dk.ucsd.edu\jaduckwo\DataAnalysis');
+    data_folder = files(n).folder;
+    vsl_mask = imread(fullfile(data_folder, 'Mask.tif'));
+    vsl_im = imread(fullfile(data_folder, 'Mask1.tif'));
+    neuron_mask = load(fullfile(data_folder, 'rim.mat'));
+    conn = bwconncomp(vsl_mask);
+    if conn.NumObjects>20
+        opt.downsample_rate = 2;
+        opt.imdilate_disk_r = 1;
+        opt.min_kept_cc_num_pixel = 35; % You would need a larger value for higher resolution image 35 for Prime
+        opt.rm_neighbor_out_of_mask_Q = true;
+        opt.vis_mask_Q = true; % Show the cleaned up mask
+        [~, vsl_mask] = fun_get_skeleton_neighbor_ind(vsl_mask, opt); %vsl_mask only used for midline detection
+%         toplot.mask = vsl_mask;
+    end
+    if contains(filename,'02.Jul.2021')
+% tmp1 = load("\\birdstore.dk.ucsd.edu\data\Thomas_1P\Gal\TB200907F3\02.Jul.2021_20.01.15_TB200907F3_PwrG80R80_rightpuffis_0,08Hz_2,5psi\02.Jul.2021_20.01.15_TB200907F3_PwrG80R80_rightpuffis_0,08Hz_2,5psisvd_puff_neurons.mat");
+% neurotoplot = tmp1.toplot;
+% tmp2 = load("\\birdstore.dk.ucsd.edu\data\Thomas_1P\Gal\TB200907F3\02.Jul.2021_20.01.15_TB200907F3_PwrG80R80_rightpuffis_0,08Hz_2,5psi\02.Jul.2021_20.01.15_TB200907F3_PwrG80R80_rightpuffis_0,08Hz_2,5psisvd_puff_toplot.mat");
+% toplot = tmp2.toplot;
+% tmp3 = load("\\birdstore.dk.ucsd.edu\data\Thomas_1P\Gal\TB200907F3\02.Jul.2021_20.01.15_TB200907F3_PwrG80R80_rightpuffis_0,08Hz_2,5psi\rim.mat");
+% rim = tmp3.rim;
+summask = neurotoplot.mask+toplot.mask-rim;
+outermask = summask<0;
+nmask2 = neurotoplot.mask + outermask;
+    end
+    try
+        [is_near_midline_Q] = Thomas_generate_hemisphere_mask(vsl_mask,vsl_im,neuron_mask);
+    catch
+        try
+            [is_near_midline_Q] = Thomas_generate_hemisphere_mask(vsl_mask,vsl_im,neuron_mask);
+        catch
+            [is_near_midline_Q] = Thomas_generate_hemisphere_mask(vsl_mask,vsl_im,neuron_mask);
+        end
+    end
+    is_near_midline_Q(end+500,end+500) = 0;
+    tmp_is_near_midline_Q = [zeros(size(is_near_midline_Q,1),500),is_near_midline_Q];
+    tmp_is_near_midline_Q2 = [zeros(500,size(tmp_is_near_midline_Q,2));tmp_is_near_midline_Q];
+    tmp_is_near_midline_Q2 = tmp_is_near_midline_Q2(min(row):max(row),min(col):max(col));
+    
+    maxmap = imregionalmax(bwdist(~tmp_is_near_midline_Q2)); %Find center of Xiang's extracted midline
+    [y,x] = ind2sub(size(maxmap),find(maxmap));
+    p = polyfit(x,y,1); %Fit this midline
+    x1 = linspace(0,size(maxmap,2));
+    y1 = polyval(p,x1);
+    figure
+    imagesc(expmap2_ml)
+    hold on
+    plot(x1,y1) 
+    
+    cd('\\dk-server.dk.ucsd.edu\jaduckwo\DataAnalysis\')
+    [x,y] = bresenham(1,round(y1(1),0),size(mldistmap,2),round(y1(end),0)); %From file exchange, should write my own later (To get coords of midline)
+    bresind = sub2ind(size(expmap2_ml),y,x);
+    bresindup = bresind-1; [yup,xup] = ind2sub(size(expmap2_ml),bresindup);
+    hold on; plot(x,y,'or'); plot(xup,yup,'ob');
+    %% Make derivative matrix and solve
+    
+    N = size(exprim,1);
+    N2 = size(exprim,2);
+    n2 = numel(exprim);
+    numdiag = trace(speye(n2)); %diag elements in off diagonals
+    offdiag = ones(numdiag,1);
+    offdiag(N:N:end) = 0;
+    e = ones(n2,1);
+    D = spdiags([e, offdiag, -4*e, offdiag, e],[-N,-1:1,N],n2,n2); %-4 along diag, 1 on off diags, 1 on diags for x-dir derivatives
+    for i=1:N2-1 %See Notes, need to exclude derivatives across array boundaries 
+        D(i*N,i*N+1) = 0;
+        D(i*N+1,i*N) = 0;
+    end
+    D_v = D; %Vessel derivative matrix is the same as neuron's so far
+    
+    midlinemap = zeros(size(expmap2_ml));
+    midlinemap(bresind) = 1;
+
+    %Modify D matrix to implement neumann boundary conditions for vessels
+    m1 = abs(p(1));
+    m2 = 1-m1;
+
+for i=2:length(bresind)-1 %Implement type 2 bc
+%         D_v(bresindup(i),bresindup(i)-2) = 0; %This works(flat type 2bc)
+%         D_v(bresindup(i),bresindup(i)-1) = 2;
+%         D_v(bresindup(i),bresindup(i)) = -4;
+%         D_v(bresindup(i),bresindup(i)+1) = 0;
+%         
+%         D_v(bresind(i),bresind(i)+2) = 0;
+%         D_v(bresind(i),bresind(i)-1) = 0;
+%         D_v(bresind(i),bresind(i)) = -4;
+%         D_v(bresind(i),bresind(i)+1) = 2;
+if sign(p(1))==-1 %Implement type 2 bc for sloped midline (linearlly interpolate pixel values based on midline slope)
+        D_v(bresindup(i),bresindup(i)-1-N) = 2*m1; %up and to the l
+        D_v(bresindup(i),bresindup(i)-1) = 2*m2; %pixel above
+        D_v(bresindup(i),bresindup(i)) = -4;
+        D_v(bresindup(i),bresindup(i)+1) = 0;
+        
+        D_v(bresind(i),bresind(i)-1) = 0;
+        D_v(bresind(i),bresind(i)) = -4;
+        D_v(bresind(i),bresind(i)+1) = 2*m2; 
+        D_v(bresind(i),bresind(i)+1+N) = 2*m1;
+elseif sign(p(1))==1 %Sign tells us if midline is sloped positive or negative
+        D_v(bresindup(i),bresindup(i)-1+N) = 2*m1; %up and to the r
+        D_v(bresindup(i),bresindup(i)-1) = 2*m2; %pixel above
+        D_v(bresindup(i),bresindup(i)) = -4;
+        D_v(bresindup(i),bresindup(i)+1) = 0;
+        
+        D_v(bresind(i),bresind(i)-1) = 0;
+        D_v(bresind(i),bresind(i)) = -4;
+        D_v(bresind(i),bresind(i)+1) = 2*m2; 
+        D_v(bresind(i),bresind(i)+1-N) = 2*m1;
+end
+end
+
+    todel_n = find(~imfill(smring)); %Don't solve equations outside of ring (delete them)
+    todel = todel_n;
+    rim_ind = find(imfill(smring));
+    rim_ind_n = rim_ind;
+% 
+cd(append('\\birdstore.dk.ucsd.edu\data\Thomas_1P\Gal\JD210927F1\',filename));
+%%
+% vestest = dir('*beforepuff_wave_intp.h5');
+% if isempty(vestest)
+    for t=1:size(wave,2)
+        
+        startIter = tic;  
+        map = zeros(toplot.mask_size);
+        map(toplot.mask_ind) = wave(toplot.skel_label,t);
+        map(end+500,end+500) = 0; %Expand map to same size as exprim
+        expmap = [zeros(size(map,1),500),map];
+        expmap2 = [zeros(500,size(expmap,2));expmap];
+        expmap2 = expmap2(min(row):max(row),min(col):max(col));
+
+        tmp_b = expmap2;
+        b = tmp_b(:); %Boundary values as a vector
+
+        edgebc = smring(:);
+        f = b; 
+        f(f~=0) = 1; %Ones where bcs are
+        f(edgebc~=0) = 1;
+        F = spdiags(f,0,length(f),length(f)); %Diagonal is 1 where bcs are, 0 where no bcs
+        if t==1
+            D2 = F + (speye(n2)-F)*D_v; %Same as D in rows with non-b.c.s, 1's in rows with b.c.s (Equation there is just 1*(solution) = boundary value)
+            D2(todel,:) = []; %Delete rows and columns of L2,b2 corresponding to places where we don't want to find a solution (outside ring)
+            D2(:,todel) = [];
+            dD = decomposition(D2); %Use decomp. for following frames; speeds up code by 17x
+        end
+        b(todel) = [];
+        b = sparse(b); %Making D2 and b2 sparse speeds up solving
+        u = dD\b; %mldivide(), has built in decision tree to minimize computation time. Other methods are available
+        U = zeros(size(expmap2));
+        U(rim_ind) = u; %Need to shrink U down to map size
+        tmp_U = [zeros(corr1,size(U,2));U;zeros(corr2,size(U,2))];
+        tmp_U = [zeros(size(tmp_U,1),corr3),tmp_U,zeros(size(tmp_U,1),corr4)];
+        U = tmp_U(501:end-500,501:end-500);
+        U(~rim) = 0; %Get rid of solutions outside of rim
+        map_t(:,:,t) = U;
+        
+        if mod(t,100)==0
+            t
+            endIter = toc(startIter)
+        end
+        
+    end
+    if contains(filename,'svd')
+        h5file = [filename,'beforepuff_wave_intp.h5'];
+        h5file_n = [filename,'beforepuff_neurons_wave_intp.h5'];
+    else
+        h5file = [filename,'svd_beforepuff_wave_intp.h5'];
+        h5file_n = [filename,'svd_beforepuff_neurons_wave_intp.h5'];
+    end
+    clearvars -except startLoop todel_n map_t map_t_n rim im_mask_ind filename neurowave neurotoplot smring n2 rim_ind_n map_n corr2 corr4 corr1 corr3 h5file h5file_n n files row col D
+    test = permute(map_t,[3,1,2]);
+    im_mask_ind = find(imresize(rim,1));
+    map_t2 = double(test(:, im_mask_ind))';
+        if strlength([pwd,filename,'beforepuff_wave_intp.h5'])>250
+        'MOVE FILES TO BIRDSTORE!'
+        cd('\\dk-server.dk.ucsd.edu\jaduckwo\GalProject_Analysis\Gal_Project\LaplaceData\JD210927F1')
+        h5create(h5file,'/wave',[size(map_t2,1), size(map_t2,2)],'Datatype','double');
+        h5write(h5file,'/wave', map_t2, [1 1],[size(map_t2,1), size(map_t2,2)]);
+        h5create(h5file,'/ind',[size(im_mask_ind,1), size(im_mask_ind,2)],'Datatype','double');
+        h5write(h5file,'/ind', im_mask_ind, [1 1],[size(im_mask_ind,1), size(im_mask_ind,2)]);
+        h5create(h5file,'/size',[size(size(rim),1), size(size(rim),2)],'Datatype','double');
+        h5write(h5file,'/size', size(rim), [1 1],[size(size(rim),1), size(size(rim),2)]);
+    else
+        cd(append('\\birdstore.dk.ucsd.edu\data\Thomas_1P\Gal\JD210927F1\',filename));
+% cd("\\birdstore.dk.ucsd.edu\data\Thomas_1P\Gal\TB190910F7\24.Mar.2020_10.26.01_TB013120M4_PwrG80R75_righpuff_0.07Hz_rightVis_0.12Hz_neck_0.17Hz_2_dualCH")
+        h5create(h5file,'/wave',[size(map_t2,1), size(map_t2,2)],'Datatype','double');
+        h5write(h5file,'/wave', map_t2, [1 1],[size(map_t2,1), size(map_t2,2)]);
+        h5create(h5file,'/ind',[size(im_mask_ind,1), size(im_mask_ind,2)],'Datatype','double');
+        h5write(h5file,'/ind', im_mask_ind, [1 1],[size(im_mask_ind,1), size(im_mask_ind,2)]);
+        h5create(h5file,'/size',[size(size(rim),1), size(size(rim),2)],'Datatype','double');
+        h5write(h5file,'/size', size(rim), [1 1],[size(size(rim),1), size(size(rim),2)]);
+        end
+    f1 = figure; imagesc(map_t(:,:,1));daspect([1,1,1]);
+    caxis([-0.1,0.1]);axis off;colorbar;
+    title(filename,'Interpreter','none');
+    savefig([filename,'beforepuff_ves_intp.fig'])
+    clear map_t2 test map_t
+% end
+% neutest = dir('*puff_neurons_wave_intp.h5');
+% if isempty(neutest)
+    for t=1:size(neurowave,2) %Same for neurons, no midline boundary here.
+        startIter = tic;  
+        map_n = zeros(neurotoplot.mask_size);
+        map_n(neurotoplot.mask_ind) = neurowave(neurotoplot.skel_label,t);
+        map_n(end+500,end+500) = 0;
+        expmap_n = [zeros(size(map_n,1),500),map_n];
+        expmap2_n = [zeros(500,size(expmap_n,2));expmap_n];
+        expmap2_n = expmap2_n(min(row):max(row),min(col):max(col));
+        
+        tmp_b_n = expmap2_n;
+        b_n = tmp_b_n(:);
+        edgebc = smring(:); 
+        
+        f_n = b_n;
+        f_n(f_n~=0) = 1;
+        f_n(edgebc~=0) = 1;
+        F_n = spdiags(f_n,0,length(f_n),length(f_n));
+        
+        if t==1
+            D2_n = F_n + (speye(n2)-F_n)*D; %D in rows with non-b.c.s, 1's in rows with b.c.s
+            D2_n(todel_n,:) = []; %Delete rows and columns of D2,b2 corresponding to places where we don't want to find a solution (rim)
+            D2_n(:,todel_n) = [];
+            dD_n = decomposition(D2_n); %Use decomp. for following frames; speeds up code by 17x
+        end
+        b_n(todel_n) = [];
+        b_n = sparse(b_n); %Making D2 and b2 sparse speeds up solving
+        u_n = dD_n\b_n; %mldivide(), has built in decision tree to minimize computation time. Other methods are available
+                
+        U_n = zeros(size(expmap2_n));
+        U_n(rim_ind_n) = u_n; %Need to shrink U_n down to map size
+        tmp_U_n = [zeros(corr1,size(U_n,2));U_n;zeros(corr2,size(U_n,2))];
+        tmp_U_n = [zeros(size(tmp_U_n,1),corr3),tmp_U_n,zeros(size(tmp_U_n,1),corr4)];
+        U_n = tmp_U_n(501:end-500,501:end-500);
+        U_n(~rim) = 0;
+        map_t_n(:,:,t) = U_n;
+        
+        if mod(t,100)==0
+            t
+            endIter = toc(startIter)
+        end
+    end
+ 
+    %Save data as wave files
+%     test = permute(map_t,[3,1,2]);
+    im_mask_ind = find(imresize(rim,1));
+%     map_t2 = double(test(:, im_mask_ind))';
+    
+    test_n = permute(map_t_n,[3,1,2]);
+    map_t2_n = double(test_n(:, im_mask_ind))';
+    
+    if contains(filename,'svd')
+        h5file = [filename,'beforepuff_wave_intp.h5'];
+        h5file_n = [filename,'beforepuff_neurons_wave_intp.h5'];
+    else
+        h5file = [filename,'svd_beforepuff_wave_intp.h5'];
+        h5file_n = [filename,'svd_beforepuff_neurons_wave_intp.h5'];
+    end
+    if strlength([pwd,filename,'beforepuff_wave_intp.h5'])>250
+        'MOVE FILES TO BIRDSTORE!'
+        cd('\\dk-server.dk.ucsd.edu\jaduckwo\GalProject_Analysis\Gal_Project\LaplaceData\JD210927F1') 
+        h5create(h5file_n,'/wave',[size(map_t2_n,1), size(map_t2_n,2)],'Datatype','double');
+        h5write(h5file_n,'/wave', map_t2_n, [1 1],[size(map_t2_n,1), size(map_t2_n,2)]);
+        h5create(h5file_n,'/ind',[size(im_mask_ind,1), size(im_mask_ind,2)],'Datatype','double');
+        h5write(h5file_n,'/ind', im_mask_ind, [1 1],[size(im_mask_ind,1), size(im_mask_ind,2)]);
+        h5create(h5file_n,'/size',[size(size(rim),1), size(size(rim),2)],'Datatype','double');
+        h5write(h5file_n,'/size', size(rim), [1 1],[size(size(rim),1), size(size(rim),2)]);
+    else
+        cd(append('\\birdstore.dk.ucsd.edu\data\Thomas_1P\Gal\JD210927F1\',filename));
+% cd('\\dk-server.dk.ucsd.edu\jaduckwo\GalProject_Analysis\Gal_Project\ReAnalysis\TB190910F7');
+% cd("\\birdstore.dk.ucsd.edu\data\Thomas_1P\Gal\TB190910F7\24.Mar.2020_10.26.01_TB013120M4_PwrG80R75_righpuff_0.07Hz_rightVis_0.12Hz_neck_0.17Hz_2_dualCH");
+        h5create(h5file_n,'/wave',[size(map_t2_n,1), size(map_t2_n,2)],'Datatype','double');
+        h5write(h5file_n,'/wave', map_t2_n, [1 1],[size(map_t2_n,1), size(map_t2_n,2)]);
+        h5create(h5file_n,'/ind',[size(im_mask_ind,1), size(im_mask_ind,2)],'Datatype','double');
+        h5write(h5file_n,'/ind', im_mask_ind, [1 1],[size(im_mask_ind,1), size(im_mask_ind,2)]);
+        h5create(h5file_n,'/size',[size(size(rim),1), size(size(rim),2)],'Datatype','double');
+        h5write(h5file_n,'/size', size(rim), [1 1],[size(size(rim),1), size(size(rim),2)]);
+    end
+    %Save figures of interpolated data
+%     f1 = figure; imagesc(map_t(:,:,1));daspect([1,1,1]);
+%     caxis([-0.1,0.1]);axis off;colorbar;
+%     title(filename,'Interpreter','none');
+%     savefig([filename,'puff_ves_intp.fig'])
+    f2 = figure; imagesc(map_t_n(:,:,1));daspect([1,1,1]);
+    caxis([-0.1,0.1]);axis off;colorbar;
+    title(filename,'Interpreter','none');
+    savefig([filename,'beforepuff_neu_intp.fig'])
+end
+clearvars -except rim n files rim2 startLoop startIter
+%%
+n
+% data_folder = files(n).folder;
+% filename = extractBefore(files(n).name,'_wave_intp.h5');
+% 
+% ves_ind = h5read(append(data_folder,'\',filename,'_wave_intp.h5'),'/ind');
+% neu_ind = h5read(append(data_folder,'\',filename,'_neurons_wave_intp.h5'),'/ind');
+% ves_size = h5read(append(data_folder,'\',filename,'_wave_intp.h5'),'/size');
+% neu_size = h5read(append(data_folder,'\',filename,'_neurons_wave_intp.h5'),'/size');
+% 
+% intp_masktmp = load(append(data_folder,'\rim.mat'));
+% intp_mask = intp_masktmp.rim;
+% 
+% toplot_intp = struct();
+% toplot_intp.maskind = ves_ind;
+% toplot_intp.mask_size = ves_size;
+% toplot_intp.mask = intp_mask;
+% 
+% check = ves_ind-neu_ind;
+% if check == 0
+%     save(append(filename,'_toplot_intp.mat'),'toplot_intp')
+% else
+%     'Ind not the same'
+% end
+
+% end
+endLoop = toc(startLoop)
+%% Load processed data
+resultsfile="\\birdstore.dk.ucsd.edu\data\Thomas_1P\Gal\TB200907F3\02.Jul.2021_20.01.15_TB200907F3_PwrG80R80_rightPuffis_0,08Hz_2,5psi\02.Jul.2021_20.01.15_TB200907F3_PwrG80R80_rightPuffis_0,08Hz_2,5psipuff_wave_intp2.h5";
+results = h5read(resultsfile,'/wave');
+resultsind = h5read(resultsfile,'/ind');
+resultssize = h5read(resultsfile,'/size');
+map = zeros(resultssize);
+map(resultsind) = results(:,200);
+figure; imagesc(map);
+daspect([1,1,1])
+caxis([-0.1,0.1])
+axis off
+colorbar
+title(eraseBetween(resultsfile,'Pwr','.h5'))
+
+%% Consistency check
+%         map1 = zeros(toplot.mask_size);
+%         map1(toplot.mask_ind) = wave(toplot.skel_label,1);
+%         counter = 1;
+% for i=1:size(map,1)
+%     for j=1:size(map,2)
+%         if map1(i,j)==0 && rim(i,j)==1
+%             laplacetest3(i,j) = abs(map_t(i,j,1)-((map_t(i+1,j,1)+map_t(i-1,j,1)+map_t(i,j+1,1)+map_t(i,j-1,1)))/4);
+%             counter = counter +1;
+%         end
+%     end
+% end
+% figure; imagesc(map1);
+%%
+test = neurotoplot.mask;
+testpoly = roipoly(test);
+test(testpoly) = 1;
+rim_intp = imfill(test);
+%%
+map(toplot.mask_ind) = neurowave(toplot.skel_label,1010);
+figure
+imagesc(map)
+daspect([1,1,1])
+caxis([-0.1,0.1])
+axis off
+colorbar
+%%
+clearvars -except files
+tmp = load("\\birdstore.dk.ucsd.edu\data\Thomas_1P\Gal\TB190910F7\31.Mar.2021_13.01.34_TB190910F7_PwrG80R75_leftpuff_0.08Hz_rightVis_0.15Hz_dualCH\31.Mar.2021_13.01.34_TB190910F7_PwrG80R75_leftpuff_0.08Hz_rightVis_0.15Hz_dualCHsvd_puff_neurons.mat");
+toplot = tmp.toplot;
+rim = load("\\birdstore.dk.ucsd.edu\data\Thomas_1P\Gal\TB190910F7\31.Mar.2021_13.01.34_TB190910F7_PwrG80R75_leftpuff_0.08Hz_rightVis_0.15Hz_dualCH\rim.mat");
+test = rim.rim - toplot.mask;
+figure
+imagesc(test);
+test(test<0) = 0;
+toplot.mask = test;
+figure
+imagesc(toplot.mask);
+%% Create modified neuron mask for 02Jul 2021 trials
+
+% tmp1 = load("\\birdstore.dk.ucsd.edu\data\Thomas_1P\Gal\TB200907F3\02.Jul.2021_20.01.15_TB200907F3_PwrG80R80_rightPuffis_0,08Hz_2,5psi\02.Jul.2021_20.01.15_TB200907F3_PwrG80R80_rightPuffis_0,08Hz_2,5psisvd_puff_neurons.mat");
+% neurotoplot = tmp1.toplot;
+% tmp2 = load("\\birdstore.dk.ucsd.edu\data\Thomas_1P\Gal\TB200907F3\02.Jul.2021_20.01.15_TB200907F3_PwrG80R80_rightPuffis_0,08Hz_2,5psi\02.Jul.2021_20.01.15_TB200907F3_PwrG80R80_rightPuffis_0,08Hz_2,5psisvd_puff_toplot.mat");
+% toplot = tmp2.toplot;
+% tmp3 = load("\\birdstore.dk.ucsd.edu\data\Thomas_1P\Gal\TB200907F3\02.Jul.2021_20.01.15_TB200907F3_PwrG80R80_rightPuffis_0,08Hz_2,5psi\rim.mat");
+% rim = tmp3.rim;
+for n=6:length(files)
+    data_folder = files(n).folder;
+    filename = extractBefore(files(n).name,'_Parameters.mat');
+    
+    toplottmp = load(append(data_folder,'\',filename,'svd_puff_toplot.mat'));
+    toplot = toplottmp.toplot;
+    rim = load(append(data_folder,'\rim.mat'));
+    rim = rim.rim;
+    try
+        tmpneurotoplot = load(append(data_folder,'\',filename,'svd_puff_neurons_toplot.mat'));
+        neurotoplot = tmpneurotoplot.toplot;
+    catch
+        try
+            tmpneurotoplot = load(append(data_folder,'\',filename,'svd_puff_neurons.mat'));
+            neurotoplot = tmpneurotoplot.toplot;
+        catch
+            tmpneurotoplot = load(append('\\birdstore.dk.ucsd.edu\data\Thomas_1P\Gal\TB200907F3\',filename,'\',filename,'svd_puff_neurons.mat'));
+            neurotoplot = tmpneurotoplot.toplot;
+        end
+    end
+    
+    summask = neurotoplot.mask+toplot.mask-rim;
+    outermask = summask<0;
+    figure
+    f = imagesc(outermask);
+    cc = roipoly();
+    outermask(cc) = 1;
+    figure
+    imagesc(outermask)
+    newrim = rim;
+    newrim(outermask) = 0;
+    
+    resultsfilen = append('\\birdstore.dk.ucsd.edu\data\Thomas_1P\Gal\TB200907F3\',filename,'\',filename,'puff_neurons_wave_intp.h5');
+    % resultsfile="\\birdstore.dk.ucsd.edu\data\Thomas_1P\Gal\TB200907F3\02.Jul.2021_20.01.15_TB200907F3_PwrG80R80_rightPuffis_0,08Hz_2,5psi\02.Jul.2021_20.01.15_TB200907F3_PwrG80R80_rightPuffis_0,08Hz_2,5psipuff_neurons_wave_intp.h5";
+    results = h5read(resultsfilen,'/wave');
+    resultsind = h5read(resultsfilen,'/ind');
+    resultssize = h5read(resultsfilen,'/size');
+    map_t_n = zeros(resultssize(1),resultssize(2),size(results,2));
+    % map = zeros(resultssize);
+    for i=1:size(results,2)
+        map = zeros(resultssize);
+        map(resultsind) = results(:,i);
+        map(~newrim) = 0;
+        map_t_n(:,:,i) = map;
+        if mod(i,100)==0
+            i
+        end
+    end
+    im_mask_ind = find(imresize(newrim,1));
+    test_n = permute(map_t_n,[3,1,2]);
+    map_t2_n = double(test_n(:, im_mask_ind))';
+    h5file = [filename,'puff_wave_intp2.h5'];
+    h5file_n = [filename,'puff_neurons_wave_intp2.h5'];
+    if strlength([pwd,filename,'puff_wave_intp.h5'])>255
+        'MOVE FILES TO BIRDSTORE!'
+        cd('\\dk-server.dk.ucsd.edu\jaduckwo\GalProject_Analysis\Gal_Project\LaplaceData\TB200907F3')
+        h5create(h5file_n,'/wave',[size(map_t2_n,1), size(map_t2_n,2)],'Datatype','double');
+        h5write(h5file_n,'/wave', map_t2_n, [1 1],[size(map_t2_n,1), size(map_t2_n,2)]);
+        h5create(h5file_n,'/ind',[size(im_mask_ind,1), size(im_mask_ind,2)],'Datatype','double');
+        h5write(h5file_n,'/ind', im_mask_ind, [1 1],[size(im_mask_ind,1), size(im_mask_ind,2)]);
+        h5create(h5file_n,'/size',[size(size(rim),1), size(size(rim),2)],'Datatype','double');
+        h5write(h5file_n,'/size', size(rim), [1 1],[size(size(rim),1), size(size(rim),2)]);
+    else
+        cd(append('\\birdstore.dk.ucsd.edu\data\Thomas_1P\Gal\TB200907F3\',filename));
+        h5create(h5file_n,'/wave',[size(map_t2_n,1), size(map_t2_n,2)],'Datatype','double');
+        h5write(h5file_n,'/wave', map_t2_n, [1 1],[size(map_t2_n,1), size(map_t2_n,2)]);
+        h5create(h5file_n,'/ind',[size(im_mask_ind,1), size(im_mask_ind,2)],'Datatype','double');
+        h5write(h5file_n,'/ind', im_mask_ind, [1 1],[size(im_mask_ind,1), size(im_mask_ind,2)]);
+        h5create(h5file_n,'/size',[size(size(rim),1), size(size(rim),2)],'Datatype','double');
+        h5write(h5file_n,'/size', size(rim), [1 1],[size(size(rim),1), size(size(rim),2)]);
+    end
+    %     %Save figures of interpolated data
+    f2 = figure; imagesc(map_t_n(:,:,1));daspect([1,1,1]);
+    caxis([-0.1,0.1]);axis off;colorbar;
+    title(filename,'Interpreter','none');
+    savefig([filename,'puff_neu_intp.fig'])
+    
+    
+    resultsfilen = append('\\birdstore.dk.ucsd.edu\data\Thomas_1P\Gal\TB200907F3\',filename,'\',filename,'puff_wave_intp.h5');
+    % resultsfile="\\birdstore.dk.ucsd.edu\data\Thomas_1P\Gal\TB200907F3\02.Jul.2021_20.01.15_TB200907F3_PwrG80R80_rightPuffis_0,08Hz_2,5psi\02.Jul.2021_20.01.15_TB200907F3_PwrG80R80_rightPuffis_0,08Hz_2,5psipuff_neurons_wave_intp.h5";
+    results = h5read(resultsfilen,'/wave');
+    resultsind = h5read(resultsfilen,'/ind');
+    resultssize = h5read(resultsfilen,'/size');
+    map_t = zeros(resultssize(1),resultssize(2),size(results,2));
+    % map = zeros(resultssize);
+    for i=1:size(results,2)
+        map = zeros(resultssize);
+        map(resultsind) = results(:,i);
+        map(~newrim) = 0;
+        map_t(:,:,i) = map;
+        if mod(i,100)==0
+            i
+        end
+    end
+    h5file = [filename,'puff_wave_intp2.h5'];
+    h5file_n = [filename,'puff_neurons_wave_intp2.h5'];
+    test = permute(map_t,[3,1,2]);
+    im_mask_ind = find(imresize(newrim,1));
+    map_t2 = double(test(:, im_mask_ind))';
+    if strlength([pwd,filename,'puff_wave_intp.h5'])>255
+        'MOVE FILES TO BIRDSTORE!'
+        cd('\\dk-server.dk.ucsd.edu\jaduckwo\GalProject_Analysis\Gal_Project\LaplaceData\TB200907F3')
+        h5create(h5file,'/wave',[size(map_t2,1), size(map_t2,2)],'Datatype','double');
+        h5write(h5file,'/wave', map_t2, [1 1],[size(map_t2,1), size(map_t2,2)]);
+        h5create(h5file,'/ind',[size(im_mask_ind,1), size(im_mask_ind,2)],'Datatype','double');
+        h5write(h5file,'/ind', im_mask_ind, [1 1],[size(im_mask_ind,1), size(im_mask_ind,2)]);
+        h5create(h5file,'/size',[size(size(rim),1), size(size(rim),2)],'Datatype','double');
+        h5write(h5file,'/size', size(rim), [1 1],[size(size(rim),1), size(size(rim),2)]);
+    else
+        cd(append('\\birdstore.dk.ucsd.edu\data\Thomas_1P\Gal\TB200907F3\',filename));
+        h5create(h5file,'/wave',[size(map_t2,1), size(map_t2,2)],'Datatype','double');
+        h5write(h5file,'/wave', map_t2, [1 1],[size(map_t2,1), size(map_t2,2)]);
+        h5create(h5file,'/ind',[size(im_mask_ind,1), size(im_mask_ind,2)],'Datatype','double');
+        h5write(h5file,'/ind', im_mask_ind, [1 1],[size(im_mask_ind,1), size(im_mask_ind,2)]);
+        h5create(h5file,'/size',[size(size(rim),1), size(size(rim),2)],'Datatype','double');
+        h5write(h5file,'/size', size(rim), [1 1],[size(size(rim),1), size(size(rim),2)]);
+    end
+    f1 = figure; imagesc(map_t(:,:,1));daspect([1,1,1]);
+    caxis([-0.1,0.1]);axis off;colorbar;
+    title(filename,'Interpreter','none');
+    savefig([filename,'puff_ves_intp.fig'])
+    save('rim3_6_22.mat','newrim')
+end
+%%
+cd('Z:\Thomas_1P\Gal\TB190910F7');
+files = dir('*TB190910F7*\*meters.mat');
+for n=1:length(files)
+        data_folder = files(n).folder;
+    filename = extractBefore(files(n).name,'_Parameters.mat');
+       neurowave = h5read(append('\\birdstore.dk.ucsd.edu\data\Thomas_1P\Gal\TB190910F7\',filename,'\',filename,'svd_puff_neurons_wave.h5'),'/wave');
+    wave = h5read(append('\\birdstore.dk.ucsd.edu\data\Thomas_1P\Gal\TB190910F7\',filename,'\',filename,'svd_puff_wave.h5'),'/wave');
+
+    figure
+    plot(mean(wave))
+    hold on
+    plot(mean(neurowave))
+    title(filename)
+    
+end
+    
+    
+    
+
+
